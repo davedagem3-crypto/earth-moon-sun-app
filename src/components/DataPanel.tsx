@@ -276,7 +276,7 @@ function MoonPhaseIcon({ illumination, moonAge }: MoonPhaseIconProps) {
           <stop offset="100%" stopColor="#aebdcb" stopOpacity="0.84" />
         </radialGradient>
       </defs>
-      <circle cx="44" cy="44" r="38" fill="rgba(10, 14, 22, 0.92)" stroke="rgba(255, 255, 255, 0.08)" strokeWidth="1.2" />
+      <circle cx="44" cy="44" r="38" fill="#000" stroke="rgba(255, 255, 255, 0.08)" strokeWidth="1.2" />
       <circle className="phase-icon-disc" cx="44" cy="44" r="34" fill={`url(#${gradientId})`} />
       <g className="phase-icon-craters" style={{ opacity: craterOpacity }}>
         <circle cx="33" cy="33" r="4" fill="rgba(123, 140, 157, 0.7)" />
@@ -289,7 +289,7 @@ function MoonPhaseIcon({ illumination, moonAge }: MoonPhaseIconProps) {
         cx="44"
         cy="44"
         r="34.6"
-        fill="rgba(8, 11, 18, 0.96)"
+        fill="#000"
         transform={`translate(${shadowTranslateX} 0)`}
       />
       <circle cx="44" cy="44" r="34" fill="none" stroke="rgba(255, 255, 255, 0.08)" strokeWidth="1" />

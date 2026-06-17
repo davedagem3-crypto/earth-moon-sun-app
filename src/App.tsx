@@ -1,21 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw, Share2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Share2 } from 'lucide-react';
 import DataPanel from './components/DataPanel';
 import SolarScene from './components/SolarScene';
 import TimeSlider from './components/TimeSlider';
 import { getAstronomySnapshot } from './utils/astronomy';
 import { snapDateToStep } from './utils/format';
 import { createShareCard } from './utils/shareCard';
-import type { ObserverLocation, TimeSpeed } from './types';
+import type { ObserverLocation } from './types';
 
 export type InterfaceLanguage = 'zh' | 'en';
-
-const SPEEDS: TimeSpeed[] = [
-  { label: '1 小时/秒', daysPerSecond: 1 / 24 },
-  { label: '1 天/秒', daysPerSecond: 1 },
-  { label: '1 月/秒', daysPerSecond: 29.530588853 },
-  { label: '1 年/秒', daysPerSecond: 365.2422 }
-];
 
 const DAY_MS = 86_400_000;
 const SLIDER_DAYS = 365 * 3;
@@ -34,29 +27,20 @@ const UI_TEXT = {
   zh: {
     eyebrow: 'Earth · Moon · Sun',
     title: '真实地球-月亮-太阳运行模拟',
-    pause: '暂停',
-    play: '播放',
-    reset: '重置到当前时间',
     share: '生成分享卡片'
   },
   en: {
     eyebrow: 'Earth · Moon · Sun',
     title: 'Real Earth · Moon · Sun Simulator',
-    pause: 'Pause',
-    play: 'Play',
-    reset: 'Reset to now',
     share: 'Create share card'
   }
 } satisfies Record<InterfaceLanguage, Record<string, string>>;
 
 export default function App() {
   const [currentDate, setCurrentDate] = useState(() => snapDateToStep(new Date()));
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [speedIndex, setSpeedIndex] = useState(1);
   const [observer, setObserver] = useState<ObserverLocation>(OBSERVER_PRESETS[0]);
   const [language, setLanguage] = useState<InterfaceLanguage>('zh');
   const [isSharing, setIsSharing] = useState(false);
-  const lastFrameRef = useRef<number | null>(null);
   const text = UI_TEXT[language];
 
   const snapshot = useMemo(() => getAstronomySnapshot(currentDate, observer), [currentDate, observer]);
@@ -64,25 +48,6 @@ export default function App() {
     const deltaDays = (currentDate.getTime() - Date.now()) / DAY_MS;
     return Math.max(-SLIDER_DAYS, Math.min(SLIDER_DAYS, deltaDays));
   }, [currentDate]);
-
-  useEffect(() => {
-    if (!isPlaying) {
-      lastFrameRef.current = null;
-      return undefined;
-    }
-
-    let frame = 0;
-    const tick = (time: number) => {
-      if (lastFrameRef.current === null) lastFrameRef.current = time;
-      const deltaSeconds = Math.min(0.08, (time - lastFrameRef.current) / 1000);
-      lastFrameRef.current = time;
-      setCurrentDate((date) => new Date(date.getTime() + deltaSeconds * SPEEDS[speedIndex].daysPerSecond * DAY_MS));
-      frame = requestAnimationFrame(tick);
-    };
-
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [isPlaying, speedIndex]);
 
   const handleShare = async () => {
     const sceneCanvas = document.querySelector<HTMLCanvasElement>('.scene-wrap canvas');
@@ -97,47 +62,46 @@ export default function App() {
   };
 
   return (
-    <main className="app-shell">
-      <section className="simulation-pane">
-        <div className="scene-header">
-          <div>
-            <p className="eyebrow">{text.eyebrow}</p>
-            <h1>{text.title}</h1>
+    <>
+      <div className="app-cosmos-backdrop" aria-hidden="true">
+        <SolarScene className="backdrop-scene-canvas" interactive={false} snapshot={snapshot} />
+      </div>
+      <main className="app-shell">
+        <section className="simulation-pane">
+          <div className="scene-header">
+            <div>
+              <p className="eyebrow">{text.eyebrow}</p>
+              <h1>{text.title}</h1>
+            </div>
+            <div className="scene-actions">
+              <button className="icon-button" type="button" onClick={handleShare} aria-label={text.share} disabled={isSharing}>
+                <Share2 size={18} />
+              </button>
+            </div>
           </div>
-          <div className="scene-actions">
-            <button className="icon-button" type="button" onClick={handleShare} aria-label={text.share} disabled={isSharing}>
-              <Share2 size={18} />
-            </button>
-            <button className="icon-button" type="button" onClick={() => setIsPlaying((value) => !value)} aria-label={isPlaying ? text.pause : text.play}>
-              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-            </button>
-            <button className="icon-button" type="button" onClick={() => setCurrentDate(snapDateToStep(new Date()))} aria-label={text.reset}>
-              <RotateCcw size={18} />
-            </button>
+
+          <div className="scene-wrap">
+            <SolarScene snapshot={snapshot} />
           </div>
-        </div>
 
-        <div className="scene-wrap">
-          <SolarScene snapshot={snapshot} />
-        </div>
+          <TimeSlider
+            value={sliderValue}
+            rangeDays={SLIDER_DAYS}
+            currentDate={currentDate}
+            language={language}
+            onChange={(days) => setCurrentDate(snapDateToStep(new Date(Date.now() + days * DAY_MS)))}
+          />
+        </section>
 
-        <TimeSlider
-          value={sliderValue}
-          rangeDays={SLIDER_DAYS}
-          currentDate={currentDate}
+        <DataPanel
           language={language}
-          onChange={(days) => setCurrentDate(snapDateToStep(new Date(Date.now() + days * DAY_MS)))}
+          observer={observer}
+          presets={OBSERVER_PRESETS}
+          snapshot={snapshot}
+          onLanguageToggle={() => setLanguage((value) => (value === 'zh' ? 'en' : 'zh'))}
+          onObserverChange={setObserver}
         />
-      </section>
-
-      <DataPanel
-        language={language}
-        observer={observer}
-        presets={OBSERVER_PRESETS}
-        snapshot={snapshot}
-        onLanguageToggle={() => setLanguage((value) => (value === 'zh' ? 'en' : 'zh'))}
-        onObserverChange={setObserver}
-      />
-    </main>
+      </main>
+    </>
   );
 }

@@ -5,173 +5,132 @@ import * as THREE from 'three';
 import type { AstronomySnapshot, Vector3Tuple } from '../types';
 
 type SolarSceneProps = {
+  className?: string;
+  interactive?: boolean;
   snapshot: AstronomySnapshot;
 };
 
 type BodyKind = 'sun' | 'earth' | 'moon';
 
-type PointCloud = {
-  colors: Float32Array;
-  normals: Float32Array;
-  positions: Float32Array;
-  size: number;
+type OrbitPlane = {
+  origin: THREE.Vector3;
+  radius: number;
+  u: THREE.Vector3;
+  v: THREE.Vector3;
 };
 
 const BODY = {
   sun: {
     label: '太阳',
     radius: 2.9,
-    minLight: 0.82,
-    spin: 0.0006,
-    layers: [
-      { count: 980, lift: 0.004, size: 0.68 },
-      { count: 300, lift: 0.018, size: 0.95 },
-      { count: 90, lift: 0.036, size: 1.28 }
-    ],
-    gridOpacity: 0.46
+    line: '#706e66',
+    ray: '#302f2a',
+    spin: 0.00042
   },
   earth: {
     label: '地球',
     radius: 1.28,
-    minLight: 0.2,
-    spin: 0.0012,
-    layers: [
-      { count: 560, lift: 0.004, size: 0.66 },
-      { count: 150, lift: 0.017, size: 0.92 },
-      { count: 42, lift: 0.028, size: 1.2 }
-    ],
-    gridOpacity: 0.58
+    line: '#4f545b',
+    spin: 0.00105
   },
   moon: {
     label: '月亮',
     radius: 0.56,
-    minLight: 0.13,
-    spin: 0.00045,
-    layers: [
-      { count: 260, lift: 0.004, size: 0.62 },
-      { count: 82, lift: 0.017, size: 0.86 },
-      { count: 24, lift: 0.03, size: 1.08 }
-    ],
-    gridOpacity: 0.62
+    line: '#74777a',
+    spin: 0.00034
   }
 } satisfies Record<
   BodyKind,
   {
-    gridOpacity: number;
     label: string;
-    layers: Array<{ count: number; lift: number; size: number }>;
-    minLight: number;
+    line: string;
+    ray?: string;
     radius: number;
     spin: number;
   }
 >;
 
-const tempNormal = new THREE.Vector3();
-const tempLight = new THREE.Vector3();
-
-export default function SolarScene({ snapshot }: SolarSceneProps) {
+export default function SolarScene({ className, interactive = true, snapshot }: SolarSceneProps) {
   return (
-    <Canvas camera={{ position: [16, 12, 30], fov: 47 }} dpr={[1, 1.5]} gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}>
+    <Canvas className={className} camera={{ position: [16, 12, 30], fov: 47 }} dpr={[1, 1.5]} gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}>
       <color attach="background" args={['#000102']} />
       <Scene snapshot={snapshot} />
-      <OrbitControls enableDamping dampingFactor={0.08} minDistance={10} maxDistance={86} />
+      {interactive && <OrbitControls enableDamping dampingFactor={0.08} minDistance={10} maxDistance={86} />}
     </Canvas>
   );
 }
 
 function Scene({ snapshot }: SolarSceneProps) {
+  const solarPlane = useMemo(() => createOrbitPlane(snapshot.positions.sun, snapshot.positions.earth), [snapshot.positions.earth, snapshot.positions.sun]);
+  const lunarPlane = useMemo(() => createOrbitPlane(snapshot.positions.earth, snapshot.positions.moon), [snapshot.positions.earth, snapshot.positions.moon]);
+
   return (
     <>
       <StarField />
-      <OrbitLines center={[0, 0, 0]} radius={18} kind="solar" />
-      <OrbitLines center={snapshot.positions.earth} radius={3.8} kind="lunar" />
+      <OrbitLines kind="solar" plane={solarPlane} />
+      <OrbitLines kind="lunar" plane={lunarPlane} />
 
-      <DotLineBody kind="sun" lightDirection={[0, 0, 1]} position={snapshot.positions.sun} />
-      <DotLineBody kind="earth" lightDirection={snapshot.lightDirections.earth} position={snapshot.positions.earth} tilt={0.41} />
-      <DotLineBody kind="moon" lightDirection={snapshot.lightDirections.moon} position={snapshot.positions.moon} />
+      <LineBody
+        kind="sun"
+        lightDirection={[0, 0, 1]}
+        solarPlane={solarPlane}
+        position={snapshot.positions.sun}
+      />
+      <LineBody kind="earth" lightDirection={snapshot.lightDirections.earth} position={snapshot.positions.earth} tilt={0.41} />
+      <LineBody kind="moon" lightDirection={snapshot.lightDirections.moon} position={snapshot.positions.moon} />
     </>
   );
 }
 
-type DotLineBodyProps = {
+type LineBodyProps = {
   kind: BodyKind;
   lightDirection: Vector3Tuple;
   position: Vector3Tuple;
+  solarPlane?: OrbitPlane;
   tilt?: number;
 };
 
-const DotLineBody = memo(function DotLineBody({ kind, lightDirection, position, tilt = 0 }: DotLineBodyProps) {
+const LineBody = memo(function LineBody({ kind, lightDirection, position, solarPlane, tilt = 0 }: LineBodyProps) {
   const [hovered, setHovered] = useState(false);
   const groupRef = useRef<THREE.Group>(null);
-  const pointRefs = useRef<Array<THREE.Points | null>>([]);
   const body = BODY[kind];
-  const clouds = useMemo(() => createBodyPointClouds(kind), [kind]);
-  const globeLines = useMemo(() => createGlobeLines(kind), [kind]);
+  const silhouetteLines = useMemo(() => createSilhouetteLines(kind), [kind]);
+  const structureLines = useMemo(() => createStructureLines(kind), [kind]);
   const featureLines = useMemo(() => createFeatureLines(kind), [kind]);
+  const phaseLine = useMemo(() => (kind === 'moon' ? createMoonPhaseBoundary(BODY.moon.radius, lightDirection) : null), [kind, lightDirection]);
 
   useFrame(() => {
-    tempLight.set(...lightDirection).normalize();
-
-    clouds.forEach((cloud, cloudIndex) => {
-      const points = pointRefs.current[cloudIndex];
-      if (!points) return;
-
-      for (let i = 0; i < cloud.positions.length / 3; i += 1) {
-        tempNormal.set(cloud.normals[i * 3], cloud.normals[i * 3 + 1], cloud.normals[i * 3 + 2]).normalize();
-        const rawLight = kind === 'sun' ? 1 : (tempNormal.dot(tempLight) + 1) / 2;
-        const value = Math.max(body.minLight, Math.pow(rawLight, kind === 'moon' ? 1.9 : 1.35));
-        const tone = kind === 'sun' ? 0.72 + value * 0.28 : 0.24 + value * 0.76;
-
-        cloud.colors[i * 3] = tone;
-        cloud.colors[i * 3 + 1] = tone;
-        cloud.colors[i * 3 + 2] = tone;
-      }
-
-      points.geometry.attributes.color.needsUpdate = true;
-    });
-
-    if (groupRef.current) {
+    if (groupRef.current && kind !== 'sun') {
       groupRef.current.rotation.y += body.spin;
     }
   });
 
   return (
     <group position={position} rotation={[0, 0, tilt]} ref={groupRef}>
-      {kind === 'sun' && <RegularSunburst radius={body.radius} />}
+      {kind === 'sun' && solarPlane && <SolarLinework plane={solarPlane} radius={body.radius} />}
 
-      <lineSegments geometry={globeLines}>
-        <lineBasicMaterial color="#e7e9ee" opacity={body.gridOpacity} transparent />
+      <lineSegments geometry={silhouetteLines}>
+        <lineBasicMaterial color={body.line} opacity={kind === 'sun' ? 0.82 : 0.76} transparent />
+      </lineSegments>
+
+      <lineSegments geometry={structureLines}>
+        <lineBasicMaterial color={body.line} opacity={kind === 'earth' ? 0.58 : 0.44} transparent />
       </lineSegments>
 
       <lineSegments geometry={featureLines}>
-        <lineBasicMaterial color="#ffffff" opacity={kind === 'sun' ? 0.32 : 0.5} transparent />
+        <lineBasicMaterial color={body.line} opacity={kind === 'sun' ? 0.38 : 0.64} transparent />
       </lineSegments>
 
-      {clouds.map((cloud, index) => (
-        <points
-          key={`${kind}-cloud-${index}`}
-          ref={(instance) => {
-            pointRefs.current[index] = instance;
-          }}
-          onPointerOut={() => setHovered(false)}
-          onPointerOver={() => setHovered(true)}
-        >
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" array={cloud.positions} count={cloud.positions.length / 3} itemSize={3} />
-            <bufferAttribute attach="attributes-color" array={cloud.colors} count={cloud.colors.length / 3} itemSize={3} />
-          </bufferGeometry>
-          <pointsMaterial
-            alphaTest={0.08}
-            color="#ffffff"
-            depthWrite={false}
-            opacity={kind === 'sun' ? 0.96 : 0.92}
-            size={cloud.size}
-            sizeAttenuation={false}
-            transparent
-            vertexColors
-          />
-        </points>
-      ))}
+      {phaseLine && (
+        <lineSegments geometry={phaseLine}>
+          <lineBasicMaterial color={body.line} opacity={0.78} transparent />
+        </lineSegments>
+      )}
+
+      <mesh onPointerOut={() => setHovered(false)} onPointerOver={() => setHovered(true)}>
+        <sphereGeometry args={[body.radius * 1.18, 24, 16]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
 
       {hovered && (
         <Html center distanceFactor={8} position={[0, body.radius + 0.72, 0]}>
@@ -182,49 +141,43 @@ const DotLineBody = memo(function DotLineBody({ kind, lightDirection, position, 
   );
 });
 
-function RegularSunburst({ radius }: { radius: number }) {
-  const longRays = useMemo(() => createRegularSunRays(radius, 72, 1), [radius]);
-  const shortRays = useMemo(() => createRegularSunRays(radius, 72, 0.62), [radius]);
-  const rings = useMemo(() => createFlatRings(radius, [1.18, 1.42, 1.68]), [radius]);
+function SolarLinework({ plane, radius }: { plane: OrbitPlane; radius: number }) {
+  const rays = useMemo(() => createTaperedSunRayMesh(radius, 72, plane), [plane, radius]);
+  const rings = useMemo(() => createPlaneRings(radius, [1.12, 1.32, 1.58, 1.9], plane), [plane, radius]);
+  const sphereContours = useMemo(() => createSolarSphereContours(radius), [radius]);
 
   return (
     <>
-      <lineSegments geometry={longRays}>
-        <lineBasicMaterial color="#ffffff" opacity={0.62} transparent />
-      </lineSegments>
-      <lineSegments geometry={shortRays}>
-        <lineBasicMaterial color="#ffffff" opacity={0.3} transparent />
-      </lineSegments>
+      <mesh geometry={rays}>
+        <meshBasicMaterial color={BODY.sun.ray} side={THREE.DoubleSide} />
+      </mesh>
       <lineSegments geometry={rings}>
-        <lineBasicMaterial color="#e7e9ee" opacity={0.28} transparent />
+        <lineBasicMaterial color={BODY.sun.line} opacity={0.22} transparent />
+      </lineSegments>
+      <lineSegments geometry={sphereContours}>
+        <lineBasicMaterial color={BODY.sun.line} opacity={0.8} transparent />
       </lineSegments>
     </>
   );
 }
 
-function OrbitLines({ center, kind, radius }: { center: Vector3Tuple; kind: 'solar' | 'lunar'; radius: number }) {
-  const major = useMemo(() => createOrbitRing(center, radius, kind === 'solar' ? 360 : 180), [center, kind, radius]);
-  const dash = useMemo(() => createOrbitDashes(center, radius, kind === 'solar' ? 180 : 96), [center, kind, radius]);
-  const ticks = useMemo(() => createOrbitTicks(center, radius, kind === 'solar' ? 96 : 48, kind === 'solar' ? 0.24 : 0.08), [center, kind, radius]);
-  const dots = useMemo(() => createOrbitDots(center, radius, kind === 'solar' ? 260 : 120), [center, kind, radius]);
+function OrbitLines({ kind, plane }: { kind: 'solar' | 'lunar'; plane: OrbitPlane }) {
+  const major = useMemo(() => createOrbitRing(plane, kind === 'solar' ? 360 : 180), [kind, plane]);
+  const dust = useMemo(() => (kind === 'solar' ? createOrbitPlaneDust(plane, 96) : null), [kind, plane]);
 
   return (
     <>
       <lineSegments geometry={major}>
-        <lineBasicMaterial color="#e7e9ee" opacity={kind === 'solar' ? 0.22 : 0.3} transparent />
+        <lineBasicMaterial color="#7b7c7e" opacity={kind === 'solar' ? 0.46 : 0.52} transparent />
       </lineSegments>
-      <lineSegments geometry={dash}>
-        <lineBasicMaterial color="#ffffff" opacity={kind === 'solar' ? 0.42 : 0.52} transparent />
-      </lineSegments>
-      <lineSegments geometry={ticks}>
-        <lineBasicMaterial color="#ffffff" opacity={kind === 'solar' ? 0.34 : 0.42} transparent />
-      </lineSegments>
-      <points>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" array={dots} count={dots.length / 3} itemSize={3} />
-        </bufferGeometry>
-        <pointsMaterial color="#ffffff" opacity={kind === 'solar' ? 0.5 : 0.62} size={kind === 'solar' ? 0.92 : 1.12} sizeAttenuation={false} transparent />
-      </points>
+      {dust && (
+        <points>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" array={dust} count={dust.length / 3} itemSize={3} />
+          </bufferGeometry>
+          <pointsMaterial color="#ffffff" opacity={0.8} size={0.42} sizeAttenuation={false} transparent />
+        </points>
+      )}
     </>
   );
 }
@@ -239,52 +192,32 @@ function StarField() {
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" array={stars} count={stars.length / 3} itemSize={3} />
         </bufferGeometry>
-        <pointsMaterial color="#ffffff" opacity={0.34} size={1.05} sizeAttenuation={false} transparent />
+        <pointsMaterial color="#c8cace" opacity={0.2} size={0.72} sizeAttenuation={false} transparent />
       </points>
       <lineSegments geometry={chartLines}>
-        <lineBasicMaterial color="#d8dde8" opacity={0.12} transparent />
+        <lineBasicMaterial color="#c8cace" opacity={0.07} transparent />
       </lineSegments>
     </>
   );
 }
 
-function createBodyPointClouds(kind: BodyKind): PointCloud[] {
-  const body = BODY[kind];
-
-  return body.layers.map((layer, layerIndex) => {
-    const positions = new Float32Array(layer.count * 3);
-    const normals = new Float32Array(layer.count * 3);
-    const colors = new Float32Array(layer.count * 3);
-    const increment = Math.PI * (3 - Math.sqrt(5));
-    const offset = 2 / layer.count;
-
-    for (let i = 0; i < layer.count; i += 1) {
-      const y = i * offset - 1 + offset / 2;
-      const ring = Math.sqrt(1 - y * y);
-      const angle = i * increment + layerIndex * 0.73;
-      const normal = new THREE.Vector3(Math.cos(angle) * ring, y, Math.sin(angle) * ring).normalize();
-      const lift = body.radius * (1 + (hash(i * 7.113 + layerIndex * 19.77) - 0.5) * layer.lift);
-
-      positions[i * 3] = normal.x * lift;
-      positions[i * 3 + 1] = normal.y * lift;
-      positions[i * 3 + 2] = normal.z * lift;
-      normals[i * 3] = normal.x;
-      normals[i * 3 + 1] = normal.y;
-      normals[i * 3 + 2] = normal.z;
-      colors[i * 3] = 1;
-      colors[i * 3 + 1] = 1;
-      colors[i * 3 + 2] = 1;
-    }
-
-    return { colors, normals, positions, size: layer.size };
-  });
-}
-
-function createGlobeLines(kind: BodyKind) {
+function createSilhouetteLines(kind: BodyKind) {
   const radius = BODY[kind].radius;
   const positions: number[] = [];
-  const latitudes = kind === 'moon' ? [-0.58, -0.22, 0.22, 0.58] : [-0.72, -0.48, -0.24, 0, 0.24, 0.48, 0.72];
-  const meridians = kind === 'sun' ? 16 : kind === 'earth' ? 10 : 7;
+  appendCircleSegments(positions, 180, (angle) => [Math.cos(angle) * radius * 1.012, Math.sin(angle) * radius * 1.012, 0]);
+  appendCircleSegments(positions, 180, (angle) => [Math.cos(angle) * radius * 1.012, 0, Math.sin(angle) * radius * 1.012]);
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+}
+
+function createStructureLines(kind: BodyKind) {
+  const radius = BODY[kind].radius;
+  const positions: number[] = [];
+  if (kind === 'sun') {
+    return createFlatRings(radius, [0.56, 0.74, 0.92]);
+  }
+
+  const latitudes = kind === 'moon' ? [-0.48, 0, 0.48] : [-0.72, -0.48, -0.24, 0, 0.24, 0.48, 0.72];
+  const meridians = kind === 'earth' ? 12 : 5;
 
   latitudes.forEach((latitude) => {
     const y = radius * latitude;
@@ -301,9 +234,6 @@ function createGlobeLines(kind: BodyKind) {
     });
   }
 
-  appendCircleSegments(positions, 160, (angle) => [Math.cos(angle) * radius * 1.012, Math.sin(angle) * radius * 1.012, 0]);
-  appendCircleSegments(positions, 160, (angle) => [Math.cos(angle) * radius * 1.012, 0, Math.sin(angle) * radius * 1.012]);
-
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 }
 
@@ -313,17 +243,80 @@ function createFeatureLines(kind: BodyKind) {
   return createMoonCraterLines(BODY.moon.radius);
 }
 
-function createRegularSunRays(radius: number, count: number, lengthScale: number) {
+function createTaperedSunRayMesh(radius: number, count: number, plane: OrbitPlane) {
   const positions: number[] = [];
+  const indices: number[] = [];
 
   for (let i = 0; i < count; i += 1) {
     const angle = (i / count) * Math.PI * 2;
     const primary = i % 6 === 0;
     const secondary = i % 3 === 0;
-    const start = radius * (primary ? 1.12 : 1.18);
-    const end = radius * (primary ? 4.55 : secondary ? 3.72 : 3.18) * lengthScale;
+    const startRadius = radius * 1.36;
+    const endRadius = radius * (primary ? 5.35 : secondary ? 4.45 : 3.72);
+    const rootWidth = radius * (primary ? 0.092 : secondary ? 0.072 : 0.054);
+    const tipWidth = radius * (primary ? 0.009 : 0.006);
+    const dir = plane.u.clone().multiplyScalar(Math.cos(angle)).add(plane.v.clone().multiplyScalar(Math.sin(angle))).normalize();
+    const tangent = plane.v.clone().multiplyScalar(Math.cos(angle)).add(plane.u.clone().multiplyScalar(-Math.sin(angle))).normalize();
+    const startCenter = dir.clone().multiplyScalar(startRadius);
+    const endCenter = dir.clone().multiplyScalar(endRadius);
+    const baseIndex = positions.length / 3;
+    const leftRoot = startCenter.clone().add(tangent.clone().multiplyScalar(rootWidth));
+    const rightRoot = startCenter.clone().add(tangent.clone().multiplyScalar(-rootWidth));
+    const leftTip = endCenter.clone().add(tangent.clone().multiplyScalar(tipWidth));
+    const rightTip = endCenter.clone().add(tangent.clone().multiplyScalar(-tipWidth));
 
-    positions.push(Math.cos(angle) * start, 0, Math.sin(angle) * start, Math.cos(angle) * end, 0, Math.sin(angle) * end);
+    positions.push(leftRoot.x, leftRoot.y, leftRoot.z, rightRoot.x, rightRoot.y, rightRoot.z, leftTip.x, leftTip.y, leftTip.z, rightTip.x, rightTip.y, rightTip.z);
+    indices.push(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex + 1, baseIndex + 3, baseIndex + 2);
+  }
+
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)).setIndex(indices);
+}
+
+function createSolarSphereContours(radius: number) {
+  const positions: number[] = [];
+  const turns = [0, Math.PI / 8, Math.PI / 4, (Math.PI * 3) / 8, Math.PI / 2, (Math.PI * 5) / 8, (Math.PI * 3) / 4, (Math.PI * 7) / 8];
+  const latitudes = [-0.64, -0.38, -0.16, 0.16, 0.38, 0.64];
+
+  turns.forEach((turn) => {
+    appendCircleSegments(positions, 128, (angle) => {
+      const x = Math.cos(angle) * radius * 1.006;
+      const y = Math.sin(angle) * radius * 1.006;
+      return [Math.cos(turn) * x, y, Math.sin(turn) * x];
+    });
+  });
+
+  latitudes.forEach((latitude) => {
+    const y = radius * latitude;
+    const ringRadius = Math.sqrt(Math.max(0, radius * radius - y * y));
+    appendCircleSegments(positions, 128, (angle) => [Math.cos(angle) * ringRadius, y, Math.sin(angle) * ringRadius]);
+  });
+
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+}
+
+function createSolarCoronaLines(radius: number) {
+  const positions: number[] = [];
+  const count = 36;
+
+  for (let i = 0; i < count; i += 1) {
+    const base = (i / count) * Math.PI * 2;
+    const spread = 0.045 + (i % 3) * 0.012;
+    const inner = radius * 1.04;
+    const outer = radius * (1.62 + (i % 4) * 0.16);
+    positions.push(
+      Math.cos(base - spread) * inner,
+      0,
+      Math.sin(base - spread) * inner,
+      Math.cos(base) * outer,
+      0,
+      Math.sin(base) * outer,
+      Math.cos(base) * outer,
+      0,
+      Math.sin(base) * outer,
+      Math.cos(base + spread) * inner,
+      0,
+      Math.sin(base + spread) * inner
+    );
   }
 
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -334,6 +327,22 @@ function createFlatRings(radius: number, multipliers: number[]) {
   multipliers.forEach((multiplier) => {
     appendCircleSegments(positions, 160, (angle) => [Math.cos(angle) * radius * multiplier, 0, Math.sin(angle) * radius * multiplier]);
   });
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+}
+
+function createPlaneRings(radius: number, multipliers: number[], plane: OrbitPlane) {
+  const positions: number[] = [];
+
+  multipliers.forEach((multiplier) => {
+    appendCircleSegments(positions, 160, (angle) => {
+      const point = plane.u
+        .clone()
+        .multiplyScalar(Math.cos(angle) * radius * multiplier)
+        .add(plane.v.clone().multiplyScalar(Math.sin(angle) * radius * multiplier));
+      return [point.x, point.y, point.z];
+    });
+  });
+
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 }
 
@@ -399,70 +408,68 @@ function createMoonCraterLines(radius: number) {
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 }
 
-function createOrbitRing(center: Vector3Tuple, radius: number, segments: number) {
+function createMoonPhaseBoundary(radius: number, lightDirection: Vector3Tuple) {
   const positions: number[] = [];
-  appendCircleSegments(positions, segments, (angle) => [center[0] + Math.cos(angle) * radius, center[1], center[2] + Math.sin(angle) * radius]);
-  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-}
+  const n = new THREE.Vector3(...lightDirection).normalize();
+  const seed = Math.abs(n.y) > 0.86 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const t1 = new THREE.Vector3().crossVectors(n, seed).normalize();
+  const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
 
-function createOrbitDashes(center: Vector3Tuple, radius: number, segments: number) {
-  const positions: number[] = [];
-
-  for (let i = 0; i < segments; i += 1) {
-    if (i % 4 === 2) continue;
-    const a = (i / segments) * Math.PI * 2;
-    const b = ((i + 0.54) / segments) * Math.PI * 2;
-    positions.push(
-      center[0] + Math.cos(a) * radius,
-      center[1],
-      center[2] + Math.sin(a) * radius,
-      center[0] + Math.cos(b) * radius,
-      center[1],
-      center[2] + Math.sin(b) * radius
-    );
-  }
+  appendCircleSegments(positions, 120, (angle) => {
+    const point = t1
+      .clone()
+      .multiplyScalar(Math.cos(angle) * radius * 1.022)
+      .add(t2.clone().multiplyScalar(Math.sin(angle) * radius * 1.022));
+    return [point.x, point.y, point.z];
+  });
 
   return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 }
 
-function createOrbitTicks(center: Vector3Tuple, radius: number, count: number, length: number) {
+function createOrbitPlane(center: Vector3Tuple, target: Vector3Tuple): OrbitPlane {
+  const origin = new THREE.Vector3(...center);
+  const radial = new THREE.Vector3(...target).sub(origin);
+  const radius = radial.length() || 1;
+  const u = radial.normalize();
+  const reference = Math.abs(u.y) > 0.92 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const v = new THREE.Vector3().crossVectors(reference, u).normalize();
+
+  return { origin, radius, u, v };
+}
+
+function createOrbitRing(plane: OrbitPlane, segments: number) {
   const positions: number[] = [];
+  appendCircleSegments(positions, segments, (angle) => {
+    const point = plane.origin
+      .clone()
+      .add(plane.u.clone().multiplyScalar(Math.cos(angle) * plane.radius))
+      .add(plane.v.clone().multiplyScalar(Math.sin(angle) * plane.radius));
+    return [point.x, point.y, point.z];
+  });
+  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+}
+
+function createOrbitPlaneDust(plane: OrbitPlane, count: number) {
+  const dust = new Float32Array(count * 3);
 
   for (let i = 0; i < count; i += 1) {
-    const angle = (i / count) * Math.PI * 2;
-    const major = i % 8 === 0;
-    const tick = length * (major ? 1.5 : 0.72);
-    const inner = radius - tick;
-    const outer = radius + tick;
-    positions.push(
-      center[0] + Math.cos(angle) * inner,
-      center[1],
-      center[2] + Math.sin(angle) * inner,
-      center[0] + Math.cos(angle) * outer,
-      center[1],
-      center[2] + Math.sin(angle) * outer
-    );
+    const angle = hash(i * 9.73) * Math.PI * 2;
+    const distance = plane.radius * Math.sqrt(hash(i * 12.41)) * 0.96;
+    const point = plane.origin
+      .clone()
+      .add(plane.u.clone().multiplyScalar(Math.cos(angle) * distance))
+      .add(plane.v.clone().multiplyScalar(Math.sin(angle) * distance));
+
+    dust[i * 3] = point.x;
+    dust[i * 3 + 1] = point.y;
+    dust[i * 3 + 2] = point.z;
   }
 
-  return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-}
-
-function createOrbitDots(center: Vector3Tuple, radius: number, count: number) {
-  const dots = new Float32Array(count * 3);
-
-  for (let i = 0; i < count; i += 1) {
-    const angle = (i / count) * Math.PI * 2;
-    const wobble = (hash(i * 2.77) - 0.5) * 0.06;
-    dots[i * 3] = center[0] + Math.cos(angle) * (radius + wobble);
-    dots[i * 3 + 1] = center[1] + (hash(i * 4.31) - 0.5) * 0.03;
-    dots[i * 3 + 2] = center[2] + Math.sin(angle) * (radius + wobble);
-  }
-
-  return dots;
+  return dust;
 }
 
 function createStars() {
-  const count = 190;
+  const count = 18;
   const stars = new Float32Array(count * 3);
 
   for (let i = 0; i < count; i += 1) {
