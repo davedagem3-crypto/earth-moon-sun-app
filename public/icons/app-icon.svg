@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Earth Moon Sun Simulator">
+  <rect width="512" height="512" rx="112" fill="#000000"/>
+  <circle cx="256" cy="256" r="178" fill="none" stroke="#1f2a44" stroke-width="2"/>
+  <circle cx="256" cy="256" r="132" fill="none" stroke="#83a6dd" stroke-opacity="0.34" stroke-width="2"/>
+  <g stroke="#e8ecf6" stroke-linecap="round">
+    <path d="M256 72v368M72 256h368" stroke-opacity="0.28" stroke-width="2"/>
+    <path d="M126 126l260 260M386 126L126 386" stroke-opacity="0.18" stroke-width="2"/>
+  </g>
+  <circle cx="256" cy="256" r="74" fill="none" stroke="#f7fbff" stroke-width="3"/>
+  <circle cx="256" cy="256" r="53" fill="none" stroke="#f7fbff" stroke-opacity="0.35" stroke-width="2"/>
+  <circle cx="256" cy="256" r="4" fill="#f7fbff"/>
+  <circle cx="356" cy="177" r="25" fill="none" stroke="#f7fbff" stroke-width="3"/>
+  <circle cx="394" cy="145" r="8" fill="#f7fbff"/>
+  <g fill="#f7fbff">
+    <circle cx="190" cy="213" r="3"/>
+    <circle cx="232" cy="184" r="2"/>
+    <circle cx="304" cy="302" r="2.5"/>
+    <circle cx="167" cy="326" r="2"/>
+    <circle cx="338" cy="378" r="2"/>
+  </g>
+</svg>

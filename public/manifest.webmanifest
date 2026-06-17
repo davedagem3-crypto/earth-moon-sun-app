@@ -1,0 +1,20 @@
+{
+  "name": "真实地球-月亮-太阳运行模拟",
+  "short_name": "地月日模拟",
+  "description": "真实展示地球、月亮、太阳相对位置与月相数据的 3D 天文模拟 App。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["education", "utilities", "science"],
+  "icons": [
+    {
+      "src": "/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
