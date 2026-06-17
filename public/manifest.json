@@ -1,0 +1,16 @@
+{
+  "name": "地月日模拟",
+  "short_name": "地月日",
+  "start_url": "/earth-moon-sun-app/",
+  "scope": "/earth-moon-sun-app/",
+  "display": "standalone",
+  "background_color": "#050608",
+  "theme_color": "#050608",
+  "icons": [
+    {
+      "src": "/earth-moon-sun-app/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
