@@ -1,4 +1,4 @@
-import { Search } from 'lucide-react';
+import { LocateFixed, Search } from 'lucide-react';
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type { InterfaceLanguage } from '../App';
 import type { AstronomySnapshot, ObserverLocation } from '../types';
@@ -47,6 +47,17 @@ const UI = {
     illumination: '照明',
     observing: '观测条件',
     location: '观测地',
+    locationName: '观测地名称',
+    locate: '获取当前坐标',
+    locating: '定位中',
+    locatingAddress: '解析地址中',
+    located: '已更新当前位置',
+    keepNameConfirm: (name: string) => `系统识别到新的位置名称：${name}\n\n是否使用新的系统地址覆盖当前自定义名称？`,
+    denied: '用户拒绝定位授权',
+    timeout: '定位超时',
+    unavailable: '无法获取当前位置',
+    unsupported: '当前浏览器不支持定位',
+    addressFailed: '无法解析地址',
     latitude: '纬度',
     longitude: '经度',
     time: '时间',
@@ -70,6 +81,17 @@ const UI = {
     illumination: 'Illumination',
     observing: 'Observation',
     location: 'Location',
+    locationName: 'Location Name',
+    locate: 'Get current coordinates',
+    locating: 'Locating',
+    locatingAddress: 'Resolving address',
+    located: 'Current location updated',
+    keepNameConfirm: (name: string) => `New location name detected: ${name}\n\nUse this system address and replace your custom name?`,
+    denied: 'Location permission denied',
+    timeout: 'Location timed out',
+    unavailable: 'Unable to get current location',
+    unsupported: 'Geolocation is not supported',
+    addressFailed: 'Unable to resolve address',
     latitude: 'Latitude',
     longitude: 'Longitude',
     time: 'Time',
@@ -90,11 +112,52 @@ function displayCity(name: string, language: InterfaceLanguage) {
   return language === 'en' ? CITY_EN[name] ?? name : name;
 }
 
+function resolveGeolocationError(error: GeolocationPositionError, language: InterfaceLanguage) {
+  const text = UI[language];
+  if (error.code === error.PERMISSION_DENIED) return text.denied as string;
+  if (error.code === error.TIMEOUT) return text.timeout as string;
+  return text.unavailable as string;
+}
+
+function chooseAddressName(payload: unknown, language: InterfaceLanguage) {
+  const data = payload as {
+    address?: Record<string, string | undefined>;
+    display_name?: string;
+    name?: string;
+  };
+  const address = data.address ?? {};
+  const parts =
+    language === 'zh'
+      ? [address.province, address.city ?? address.town ?? address.village, address.suburb ?? address.neighbourhood ?? address.road]
+      : [address.city ?? address.town ?? address.village, address.state, address.country];
+  const compact = parts.filter(Boolean).join(language === 'zh' ? '' : ', ');
+  return compact || data.name || data.display_name?.split(',').slice(0, 3).join(', ').trim() || '';
+}
+
+async function reverseGeocode(latitude: number, longitude: number, language: InterfaceLanguage) {
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    lat: latitude.toFixed(6),
+    lon: longitude.toFixed(6),
+    zoom: '16',
+    addressdetails: '1',
+    'accept-language': language === 'zh' ? 'zh-CN,zh;q=0.9,en;q=0.7' : 'en,zh-CN;q=0.6'
+  });
+  const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+    headers: { Accept: 'application/json' }
+  });
+  if (!response.ok) throw new Error('reverse-geocoding-failed');
+  return chooseAddressName(await response.json(), language);
+}
+
 export default function DataPanel({ language, observer, presets, snapshot, onLanguageToggle, onObserverChange }: DataPanelProps) {
   const text = UI[language];
   const presetName = presets.some((preset) => preset.name === observer.name) ? observer.name : '自定义';
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationStatus, setLocationStatus] = useState('');
+  const [hasCustomLocationName, setHasCustomLocationName] = useState(false);
 
   useEffect(() => {
     if (presetName !== '自定义') {
@@ -109,6 +172,68 @@ export default function DataPanel({ language, observer, presets, snapshot, onLan
   }, [presets, searchQuery]);
 
   const showSearchResults = searchFocused || searchQuery.trim().length > 0;
+
+  const handlePresetSelect = (preset: ObserverLocation) => {
+    onObserverChange(preset);
+    setHasCustomLocationName(false);
+    setLocationStatus('');
+    setSearchQuery('');
+    setSearchFocused(false);
+  };
+
+  const handleLocationNameChange = (name: string) => {
+    setHasCustomLocationName(true);
+    onObserverChange({ ...observer, name });
+  };
+
+  const handleLocate = () => {
+    if (!navigator.geolocation) {
+      setLocationStatus(text.unsupported as string);
+      return;
+    }
+
+    setIsLocating(true);
+    setLocationStatus(text.locating as string);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const latitude = Number(position.coords.latitude.toFixed(4));
+        const longitude = Number(position.coords.longitude.toFixed(4));
+        const baseObserver = { ...observer, latitude, longitude };
+
+        onObserverChange(baseObserver);
+        setLocationStatus(text.locatingAddress as string);
+
+        try {
+          const systemName = await reverseGeocode(latitude, longitude, language);
+          if (!systemName) throw new Error('empty-address');
+
+          const shouldUseSystemName =
+            !hasCustomLocationName || window.confirm((text.keepNameConfirm as (name: string) => string)(systemName));
+
+          onObserverChange({
+            ...baseObserver,
+            name: shouldUseSystemName ? systemName : observer.name
+          });
+          setHasCustomLocationName(!shouldUseSystemName);
+          setLocationStatus(text.located as string);
+        } catch {
+          onObserverChange(baseObserver);
+          setLocationStatus(text.addressFailed as string);
+        } finally {
+          setIsLocating(false);
+        }
+      },
+      (error) => {
+        setLocationStatus(resolveGeolocationError(error, language));
+        setIsLocating(false);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 60_000,
+        timeout: 12_000
+      }
+    );
+  };
 
   return (
     <aside className="data-panel">
@@ -137,11 +262,7 @@ export default function DataPanel({ language, observer, presets, snapshot, onLan
                 className={preset.name === observer.name ? 'city-search-option is-active' : 'city-search-option'}
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onObserverChange(preset);
-                  setSearchQuery('');
-                  setSearchFocused(false);
-                }}
+                onClick={() => handlePresetSelect(preset)}
               >
                 <span>{displayCity(preset.name, language)}</span>
                 <small>
@@ -173,9 +294,18 @@ export default function DataPanel({ language, observer, presets, snapshot, onLan
           <div className="observer-hero">
             <p className="eyebrow">{text.location as string}</p>
             <div className="observer-hero-header">
-              <div className="observer-city-value">{displayCity(snapshot.observerName, language)}</div>
-              <span className="observer-hero-spacer" aria-hidden="true" />
+              <input
+                className="observer-city-value observer-name-input"
+                type="text"
+                value={displayCity(snapshot.observerName, language)}
+                aria-label={text.locationName as string}
+                onChange={(event) => handleLocationNameChange(event.target.value)}
+              />
+              <button className="locate-button" type="button" onClick={handleLocate} disabled={isLocating}>
+                <LocateFixed size={13} />
+              </button>
             </div>
+            {locationStatus && <p className="location-status">{locationStatus}</p>}
           </div>
           <label>
             <span>{text.latitude as string}</span>
